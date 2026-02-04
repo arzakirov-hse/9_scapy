@@ -113,42 +113,80 @@ def capture_traffic(hostname, timeout=30, output_file=None):
     return packets
 
 
+XSS_PAYLOADS = [
+    "<script>",
+    "</script>",
+    "javascript:",
+    "onerror=",
+    "onload=",
+    "<img",
+    "<svg",
+    "alert(",
+    "document.cookie",
+    "window.location",
+]
+
+
 def analyze_packets(packets):
-    """Базовый анализ перехваченных пакетов."""
+    """Анализ перехваченных пакетов на наличие XSS."""
     if not packets:
         print("Нет пакетов для анализа")
         return
 
-    http_data = []
+    requests = []
+    responses = []
+
     for pkt in packets:
         if pkt.haslayer('Raw'):
-            raw = pkt['Raw'].load
-            if b'Content-Encoding: gzip' in raw:
-                try:
-                    body = raw.split(b'\r\n\r\n', 1)[1]
-                    decompressed = gzip.GzipFile(
-                        fileobj=io.BytesIO(body)
-                    ).read().decode('utf-8', errors='ignore')
-                    http_data.append(decompressed)
-                except:
-                    pass
-            else:
-                try:
-                    data = raw.decode('utf-8', errors='ignore')
-                    if 'HTTP' in data:
-                        http_data.append(data)
-                except:
-                    pass
+            try:
+                data = pkt['Raw'].load.decode('utf-8', errors='ignore')
 
-    print(f"Найдено HTTP-сообщений: {len(http_data)}")
+                # HTTP-запросы
+                if data.startswith(("GET", "POST")):
+                    requests.append(data)
 
-    # Выводим первые несколько HTTP-сообщений
-    for i, data in enumerate(http_data[:3], 1):
-        print(f"HTTP-сообщение {i} (первые 300 символов)")
-        print(data[:300])
+                # HTTP-ответы
+                if data.startswith("HTTP/"):
+                    responses.append(data)
 
-    # TODO для этапа 4: добавить анализ на наличие XSS-полезных нагрузок
-    # TODO для этапа 4: добавить поиск отраженных XSS в ответах сервера
+            except Exception:
+                pass
+
+    print(f"Найдено HTTP-запросов: {len(requests)}")
+    print(f"Найдено HTTP-ответов: {len(responses)}")
+
+    # --- Поиск XSS-полезных нагрузок в запросах ---
+    print("\nАнализ HTTP-запросов на XSS-полезные нагрузки:")
+    found_payloads = []
+
+    for req in requests:
+        for payload in XSS_PAYLOADS:
+            if payload.lower() in req.lower():
+                found_payloads.append(payload)
+                print("Обнаружена XSS-полезная нагрузка:")
+                print(f"  Payload: {payload}")
+                print(f"  Фрагмент запроса:\n{req[:300]}")
+                print("-" * 50)
+
+    if not found_payloads:
+        print("XSS-полезные нагрузки в запросах не обнаружены")
+
+    # --- Поиск отражённого XSS ---
+    print("\nАнализ HTTP-ответов на отражённый XSS:")
+
+    reflected_found = False
+
+    for payload in set(found_payloads):
+        for resp in responses:
+            if payload.lower() in resp.lower():
+                reflected_found = True
+                print("Обнаружен отражённый XSS!")
+                print(f"  Payload: {payload}")
+                print(f"  Фрагмент ответа:\n{resp[:300]}")
+                print("-" * 50)
+
+    if not reflected_found:
+        print("Признаки отражённого XSS не обнаружены")
 
 
 def analyze_saved_traffic(pcap_file):
@@ -246,4 +284,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
