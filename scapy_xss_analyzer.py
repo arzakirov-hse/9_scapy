@@ -2,6 +2,8 @@ import argparse
 import socket
 import random
 import time
+import gzip
+import io
 from urllib.parse import urlparse
 from scapy.layers.inet import IP, TCP
 from scapy.sendrecv import sr1, send
@@ -92,9 +94,17 @@ def capture_traffic(hostname, timeout=30, output_file=None):
 
     print(f"Начало перехвата трафика для {hostname} ({dest_ip})...")
 
-    packets = None  # TODO настройте перехват трафика
+    print(f"Перехват в течение {timeout} секунд...")
 
-    # print(f"Перехвачено пакетов: {len(packets)}")
+    # BPF-фильтр: только HTTP-трафик к нужному хосту
+    bpf_filter = f"host {dest_ip} and tcp port 80"
+
+    packets = sniff(
+        filter=bpf_filter,
+        timeout=timeout
+    )
+
+    print(f"Перехвачено пакетов: {len(packets)}")
 
     if output_file and packets:
         wrpcap(output_file, packets)
@@ -112,12 +122,23 @@ def analyze_packets(packets):
     http_data = []
     for pkt in packets:
         if pkt.haslayer('Raw'):
-            try:
-                data = pkt['Raw'].load.decode('utf-8', errors='ignore')
-                if 'HTTP' in data or 'GET' in data or 'POST' in data:
-                    http_data.append(data)
-            except:
-                pass
+            raw = pkt['Raw'].load
+            if b'Content-Encoding: gzip' in raw:
+                try:
+                    body = raw.split(b'\r\n\r\n', 1)[1]
+                    decompressed = gzip.GzipFile(
+                        fileobj=io.BytesIO(body)
+                    ).read().decode('utf-8', errors='ignore')
+                    http_data.append(decompressed)
+                except:
+                    pass
+            else:
+                try:
+                    data = raw.decode('utf-8', errors='ignore')
+                    if 'HTTP' in data:
+                        http_data.append(data)
+                except:
+                    pass
 
     print(f"Найдено HTTP-сообщений: {len(http_data)}")
 
